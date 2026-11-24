@@ -5,6 +5,8 @@ from torch.utils.data import Dataset, DataLoader
 
 from paw_test_dataset import PawTestImageDataset
 
+from tqdm import tqdm
+
 import pandas as pd
 import numpy as np
 import os
@@ -13,11 +15,11 @@ device = torch.accelerator.current_accelerator().type if torch.accelerator.is_av
 print(f"Using {device} device")
 
 pawdel = PAWDEL().to(device)
-pawdel.load_state_dict(torch.load("model/pawdel_new_swap_se.pth", weights_only=True))
+pawdel.load_state_dict(torch.load("model/pawdel.pth", weights_only=True, map_location=device))
 
 current_path = os.getcwd()
-csv_train_dataset_path = os.path.join(current_path, "data/raw/petfinder-pawpularity-score/train.csv")
-image_train_dataset_path = os.path.join(current_path, "data/raw/petfinder-pawpularity-score/train")
+csv_train_dataset_path = os.path.join(current_path, "data/raw/petfinder-pawpularity-score/test.csv")
+image_train_dataset_path = os.path.join(current_path, "data/raw/petfinder-pawpularity-score/test")
 
 transform = transforms.Compose([
     # transforms.Resize((224, 224)),
@@ -41,7 +43,7 @@ pred_list = None
 
 pawdel.eval()
 with torch.no_grad():
-    for X1, X2 in test_loader:
+    for X1, X2 in tqdm(test_loader, desc="Predicting"):
         X1, X2 = X1.to(device), X2.to(device)
         pred = pawdel(X2, X1).cpu().numpy()
         if pred_list is None:

@@ -52,11 +52,11 @@ class MBCONV(nn.Module):
             nn.BatchNorm2d(mid),
             nn.ReLU6(inplace=True),
 
-            # SEBlock(mid),
+            SEBlock(mid),
 
             nn.Conv2d(mid, out_ch, 1, bias=False),
             nn.BatchNorm2d(out_ch),
-            SEBlock(out_ch)
+            # SEBlock(out_ch)
         )
 
     def forward(self, x):

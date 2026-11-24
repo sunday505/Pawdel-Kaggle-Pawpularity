@@ -13,6 +13,10 @@ from torchvision.io import decode_image
 from model import PAWDEL
 from paw_dataset import PawImageDataset
 
+from tqdm import tqdm
+
+import matplotlib.pyplot as plt 
+
 current_path = os.getcwd()
 csv_train_dataset_path = os.path.join(current_path, "data/raw/petfinder-pawpularity-score/train.csv")
 image_train_dataset_path = os.path.join(current_path, "data/raw/petfinder-pawpularity-score/train")
@@ -96,41 +100,47 @@ train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
 device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
-pawdel = PAWDEL(use_SI=True).to(device)
+pawdel = PAWDEL(use_SI=False).to(device)
 
 loss_fn = nn.MSELoss()
+
 optimizer = torch.optim.Adam(pawdel.parameters())
 
 def train(dataloader, model, loss_fn, optimizer):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
+    loss_log = []
     model.train()
-    for batch, (X1, X2, y) in enumerate(dataloader):
+    for X1, X2, y in tqdm(dataloader, desc="Training"):
         X1, X2, y = X1.to(device), X2.to(device), y.to(device)
         # Compute prediction error
-        pred = model(X2, X1)
+        pred = model(X2, X1).squeeze(1)   # [B, 1] -> [B]
+        y = y.float()
         loss = loss_fn(pred, y)
+
+        loss_log.append(loss.item())
 
         # Backpropagation
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
 
-        if batch % 12 == 0:
-            loss, current = loss.item(), (batch + 1) * len(X1)
-            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+
+    print(f"Training Loss: {(sum(loss_log) / num_batches):.6f}")
+
+    return sum(loss_log) / num_batches
 
 def test(dataloader, model, loss_fn):
     num_batches = len(dataloader)
-    model.eval()
 
     total_loss = 0.0
     total_abs_error = 0.0
     total_samples = 0
     total_sq_error = 0.0
 
+    model.eval()
     with torch.no_grad():
-        for X1, X2, y in dataloader:
+        for X1, X2, y in tqdm(dataloader, desc="Testing"):
             X1, X2, y = X1.to(device), X2.to(device), y.to(device)
 
             pred = model(X2, X1).squeeze(1)   # [B]
@@ -148,30 +158,65 @@ def test(dataloader, model, loss_fn):
     rmse = math.sqrt(total_sq_error / total_samples)
 
     print(f"Test MAE: {mae:.3f} | Avg loss: {avg_loss:.6f}")
-    print(f"MAE: {mae:.3f} | RMSE: {rmse:.3f}")
+    print(f"RMSE: {rmse}")
 
-    return avg_loss
+    return avg_loss, rmse
 
-mae_list = []
+file_name = "no_SI"
+
+loss_list = []
+test_loss_list = []
+rmse_list = []
 t = 0
-mae_not_better = 0
 train_threshold = 5
 train_count = train_threshold
-min_mae = float('inf')
-best_pawdel = None
+min_rmse = float('inf')
+
 while True:
     train_count -= 1
     print(f"Epoch {t+1}\n-------------------------------")
-    train(train_loader, pawdel, loss_fn, optimizer)
-    mae = test(test_loader, pawdel, loss_fn)
-    t += 1
-    if mae < min_mae:
+    loss = train(train_loader, pawdel, loss_fn, optimizer)
+    test_loss, rmse = test(test_loader, pawdel, loss_fn)
+
+    loss_list.append(loss)
+    test_loss_list.append(test_loss)
+    rmse_list.append(rmse)
+
+    print(f"Best Rmse: {min_rmse}")
+    print(f"Threshold Left: {train_count}")
+    
+    if rmse < min_rmse:
         train_count = train_threshold
-        min_mae = mae
-        best_pawdel = pawdel.state_dict()
+        min_rmse = rmse
+        torch.save(pawdel.state_dict(), f"model/pawdel_{file_name}.pth")
     elif train_count == 0:
         break
-print("Done!")
 
-torch.save(best_pawdel, "model/pawdel_new_train_1.pth")
-print("Saved PyTorch Model State to model.pth")
+    t += 1
+
+result_df = pd.DataFrame({"Train_Loss": loss_list, "Test_Loss": test_loss_list, "RMSE": rmse_list})
+result_df.to_csv(f"result/result_df_{file_name}.csv", index=False)
+
+x_index = [i for i in range(len(loss_list))]
+fig1, ax1 = plt.subplots()
+ax1.plot(x_index, loss_list)
+ax1.set_title("Training Loss")
+ax1.set_xlabel("Epoch")
+ax1.set_ylabel("Loss")
+fig1.savefig(f"fig/training_loss_{file_name}.png")
+
+fig2, ax2 = plt.subplots()
+ax2.plot(x_index, test_loss_list)
+ax2.set_title("Testing Loss")
+ax2.set_xlabel("Epoch")
+ax2.set_ylabel("Loss")
+fig2.savefig(f"fig/testing_loss_{file_name}.png")
+
+fig3, ax3 = plt.subplots()
+ax3.plot(x_index, rmse_list)
+ax3.set_title("RMSE of Test")
+ax3.set_xlabel("Epoch")
+ax3.set_ylabel("RMSE")
+fig3.savefig(f"fig/test_rmse_{file_name}.png")
+
+print("Done!")
